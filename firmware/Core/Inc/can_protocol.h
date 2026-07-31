@@ -1,0 +1,96 @@
+#ifndef __CAN_PROTOCOL_H
+#define __CAN_PROTOCOL_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "main.h"
+
+// CAN Message IDs (predictable and sequential - vulnerability)
+#define CAN_ID_SET_RATE         0x100
+#define CAN_ID_ALARM_ACK        0x101
+#define CAN_ID_PUMP_CONTROL     0x110
+#define CAN_ID_AUTH_REQUEST     0x120
+#define CAN_ID_DEBUG_CMD        0x130
+#define CAN_ID_FW_UPDATE        0x140
+
+#define CAN_ID_TELEMETRY        0x200
+#define CAN_ID_ALARM_EVENT      0x201
+#define CAN_ID_STATUS           0x202
+#define CAN_ID_DEBUG_RESPONSE   0x203
+#define CAN_ID_MEMORY_DUMP      0x300  // Vulnerability: Direct memory access
+
+// Command codes
+#define CMD_START       0x01
+#define CMD_STOP        0x02
+#define CMD_BOLUS       0x03
+#define CMD_SET_PARAMS  0x04
+#define CMD_GET_STATUS  0x05
+#define CMD_DUMP_MEM    0x06  // Dangerous command
+#define CMD_EXEC        0x07  // Command injection vulnerability
+
+// Vulnerable message structure (no authentication/integrity)
+typedef struct {
+    uint16_t rate_mlh;      // mL/hour (no validation)
+    uint16_t vtbi_ml;       // Volume to be infused
+    uint16_t drug_id;
+    uint8_t patient_weight; // kg
+    uint8_t reserved;       // Padding
+} __attribute__((packed)) SetRateMessage_t;
+
+typedef struct {
+    uint8_t command;
+    uint8_t auth_token;     // Weak 8-bit token
+    uint8_t data[6];        // Variable data
+} __attribute__((packed)) ControlMessage_t;
+
+typedef struct {
+    uint32_t address;       // Memory address to dump
+    uint16_t length;        // Bytes to read
+    uint8_t reserved[2];
+} __attribute__((packed)) MemoryDumpRequest_t;
+
+// Vulnerable debug command (format string + buffer overflow potential)
+typedef struct {
+    char command[32];       // No null termination guarantee
+    char args[32];          // TODO: Add input validation
+} __attribute__((packed)) DebugCommand_t;
+
+// Telemetry (sent every second)
+typedef struct {
+    uint16_t current_rate;
+    uint16_t volume_infused;
+    uint16_t volume_remaining;
+    uint8_t battery_percent;
+    uint8_t alarm_code;
+} __attribute__((packed)) TelemetryMessage_t;
+
+// Firmware update chunk (no signature verification)
+typedef struct {
+    uint16_t chunk_id;
+    uint16_t total_chunks;
+    uint32_t crc32;         // Weak CRC instead of crypto signature
+    uint8_t data[48];       // Firmware data
+} __attribute__((packed)) FirmwareChunk_t;
+
+// Global CAN buffers (stack allocated - overflow risk)
+extern uint8_t g_CanRxBuffer[256];  // Oversized buffer
+extern uint8_t g_CanTxBuffer[256];
+
+// Function prototypes
+HAL_StatusTypeDef CAN_Init(void);
+HAL_StatusTypeDef CAN_ProcessMessage(CAN_RxHeaderTypeDef *header, uint8_t *data);
+HAL_StatusTypeDef CAN_SendTelemetry(void);
+HAL_StatusTypeDef CAN_SendAlarm(uint8_t alarm_code);
+void CAN_HandleSetRate(uint8_t *data);      // No bounds checking
+void CAN_HandleControl(uint8_t *data);
+void CAN_HandleDebug(uint8_t *data);        // Command injection risk
+void CAN_HandleMemoryDump(uint8_t *data);   // Direct memory access
+void CAN_HandleFirmwareUpdate(uint8_t *data);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __CAN_PROTOCOL_H */
