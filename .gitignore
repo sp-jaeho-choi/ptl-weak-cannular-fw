@@ -15,3 +15,7 @@ firmware/Middlewares/Third_Party/FreeRTOS/
 
 # 에이전트 · 에디터 로컬 설정
 .claude/
+
+# Windows 예약 이름(널 디바이스)으로 잘못 생성된 파일.
+# 읽을 수 없어 git 이 "short read while indexing nul" 을 낸다.
+nul
