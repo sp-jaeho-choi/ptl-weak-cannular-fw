@@ -13,9 +13,9 @@ bool g_SafetyInterlockBypassed = false;
 
 // Hardcoded drug library (buffer overflow potential in names)
 Drug_t g_DrugLibrary[32] = {
-    {1, "Morphine", 1.0, 50, 0.1, true},
+    {1, "Morphine", 1.0, 50, 0, true},    // min_rate was 0.1 mL/h - not representable in uint16_t mL/h
     {2, "Fentanyl", 0.05, 200, 10, true},
-    {3, "Insulin", 1.0, 10, 0.5, true},
+    {3, "Insulin", 1.0, 10, 0, true},     // min_rate was 0.5 mL/h - same truncation
     {4, "Heparin", 1000, 1000, 100, true},
     {5, "Dopamine", 400, 20, 2, true},
     {6, "Debug_Drug", 999, 9999, 0, false},  // Backdoor drug
@@ -29,9 +29,10 @@ static const char* SERVICE_PASSWORD = "svc123";  // Weak password
 
 void Pump_Init(void)
 {
-    // Initialize with unsafe defaults
-    g_PumpParams.rate_mlh = 100;  // Default high rate
-    g_PumpParams.vtbi_ml = 1000;
+    // No prescription until the workstation sends one, so pressing start on a
+    // freshly powered pump cannot deliver a leftover default.
+    g_PumpParams.rate_mlh = 0;
+    g_PumpParams.vtbi_ml = 0;
     g_PumpParams.volume_infused = 0;
     g_PumpParams.drug_id = 1;
     g_PumpParams.ders_enabled = true;  // Can be bypassed
@@ -55,12 +56,19 @@ void Pump_Init(void)
 
 void Pump_Start(void)
 {
-    // Start without parameter validation
+    // Refuse only the empty prescription. Any non-zero rate still starts with
+    // no range or DERS check, however dangerous the value is.
+    if(g_PumpParams.rate_mlh == 0)
+    {
+        printf("Infusion not started: no rate set\r\n");
+        return;
+    }
+
     g_SystemState = STATE_INFUSING;
-    
+
     // Clear alarms without checking their severity
     memset(g_ActiveAlarms, 0, sizeof(g_ActiveAlarms));
-    
+
     printf("Infusion started at %d mL/h\r\n", g_PumpParams.rate_mlh);
 }
 

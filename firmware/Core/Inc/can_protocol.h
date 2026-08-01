@@ -66,6 +66,23 @@ typedef struct {
     uint8_t alarm_code;
 } __attribute__((packed)) TelemetryMessage_t;
 
+// Status (sent every second alongside telemetry)
+typedef struct {
+    uint8_t state;
+    uint8_t auth_level;
+    uint8_t ders_enabled;
+    uint8_t safety_bypassed;
+    uint16_t vtbi_ml;
+    uint16_t ders_hard_max;
+} __attribute__((packed)) StatusMessage_t;
+
+// Alarm acknowledge / silence (no sequence number - replayable)
+typedef struct {
+    uint8_t alarm_code;
+    uint8_t silence;
+    uint8_t reserved[6];
+} __attribute__((packed)) AlarmAckMessage_t;
+
 // Firmware update chunk (no signature verification)
 typedef struct {
     uint16_t chunk_id;
@@ -73,6 +90,56 @@ typedef struct {
     uint32_t crc32;         // Weak CRC instead of crypto signature
     uint8_t data[48];       // Firmware data
 } __attribute__((packed)) FirmwareChunk_t;
+
+// One received frame as it travels from the RX interrupt to CanTask.
+typedef struct {
+    CAN_RxHeaderTypeDef header;
+    uint8_t data[8];
+} CanRxItem_t;
+
+// ---------------------------------------------------------------------------
+//  SWD mailbox - a CAN transport that runs over the debug port.
+//
+//  With no USB-CAN adapter or transceiver on the bench, a host tool attached
+//  through ST-LINK can still exchange frames with this firmware by reading and
+//  writing these two rings in RAM. Injected frames go through exactly the same
+//  handlers as frames that arrive on the real bus.
+// ---------------------------------------------------------------------------
+#define SWD_MB_MAGIC   0x434E4D4Cu   // "CNML" little-endian
+#define SWD_MB_VERSION 1u
+#define SWD_MB_SLOTS   4u            // must be a power of two
+
+typedef struct {
+    uint32_t id;
+    uint8_t  dlc;
+    uint8_t  rsv;
+    uint8_t  data[8];
+    uint8_t  pad[2];
+} __attribute__((packed)) SwdFrame_t;   // 16 bytes
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    volatile uint32_t host_head;   // host writes rx[], then increments
+    volatile uint32_t fw_tail;     // firmware consumes rx[], then increments
+    volatile uint32_t fw_head;     // firmware writes tx[], then increments
+    volatile uint32_t host_tail;   // host consumes tx[], then increments
+    SwdFrame_t rx[SWD_MB_SLOTS];   // host -> firmware
+    SwdFrame_t tx[SWD_MB_SLOTS];   // firmware -> host
+} SwdMailbox_t;
+
+extern SwdMailbox_t g_SwdMailbox;
+
+// HAL_GetTick() of the last frame received from the workstation. Zero until the
+// first one arrives. PumpTask stops infusing if this goes stale.
+extern volatile uint32_t g_LastWsTick;
+#define WS_LINK_TIMEOUT_MS 6000u
+
+void SwdMb_Init(void);
+void SwdMb_Poll(void);   // drain host->firmware ring, dispatch as CAN frames
+
+// Sends on the real bus and mirrors into the SWD mailbox.
+HAL_StatusTypeDef CANnula_Tx(CAN_TxHeaderTypeDef *header, uint8_t *data, uint32_t *mailbox);
 
 // Global CAN buffers (stack allocated - overflow risk)
 extern uint8_t g_CanRxBuffer[256];  // Oversized buffer
@@ -82,7 +149,10 @@ extern uint8_t g_CanTxBuffer[256];
 HAL_StatusTypeDef CAN_Init(void);
 HAL_StatusTypeDef CAN_ProcessMessage(CAN_RxHeaderTypeDef *header, uint8_t *data);
 HAL_StatusTypeDef CAN_SendTelemetry(void);
+HAL_StatusTypeDef CAN_SendStatus(void);
 HAL_StatusTypeDef CAN_SendAlarm(uint8_t alarm_code);
+void CAN_EnqueueFromISR(const CanRxItem_t *item);  // defined in main.cpp, owns the queue
+void CAN_HandleAlarmAck(uint8_t *data);
 void CAN_HandleSetRate(uint8_t *data);      // No bounds checking
 void CAN_HandleControl(uint8_t *data);
 void CAN_HandleDebug(uint8_t *data);        // Command injection risk

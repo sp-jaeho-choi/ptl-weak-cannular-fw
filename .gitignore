@@ -1,0 +1,17 @@
+# 빌드 산출물
+firmware/build/
+firmware/v0.0.1/build/
+*.o
+*.d
+*.lst
+*.map
+*.elf
+
+# 벤더 트리 (ST / FreeRTOS 배포본을 그대로 복사해 넣는 자리)
+# 받는 방법은 FLASH_INSTRUCTIONS.md 를 보세요.
+firmware/Drivers/STM32F1xx_HAL_Driver/
+firmware/Drivers/CMSIS/
+firmware/Middlewares/Third_Party/FreeRTOS/
+
+# 에이전트 · 에디터 로컬 설정
+.claude/

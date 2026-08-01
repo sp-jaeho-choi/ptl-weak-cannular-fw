@@ -44,7 +44,7 @@ void SystemInit(void)
     RCC->CFGR |= RCC_CFGR_PPRE2_DIV1; // PCLK2 = HCLK
     RCC->CFGR |= RCC_CFGR_PPRE1_DIV2; // PCLK1 = HCLK/2
     
-    RCC->CFGR |= RCC_CFGR_PLLSRC_HSE;  // PLL source = HSE
+    RCC->CFGR |= RCC_CFGR_PLLSRC;      // PLL source = HSE (CMSIS F1 has no _HSE suffix)
     RCC->CFGR |= RCC_CFGR_PLLMULL9;    // PLL multiplication factor = 9
     
     // Enable HSE

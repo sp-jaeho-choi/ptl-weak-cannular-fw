@@ -7,7 +7,9 @@
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 #define configUSE_TICKLESS_IDLE                 0
 #define configCPU_CLOCK_HZ                      72000000
-#define configSYSTICK_CLOCK_HZ                  1000000
+// configSYSTICK_CLOCK_HZ must stay undefined. Defining it switches the ARM_CM3
+// port to the HCLK/8 (9MHz) SysTick source while still computing the reload from
+// the given value, which ran the tick at 9kHz instead of 1kHz.
 #define configTICK_RATE_HZ                      1000
 #define configMAX_PRIORITIES                    5
 #define configMINIMAL_STACK_SIZE                64   // Too small - stack overflow risk
@@ -27,7 +29,9 @@
 // Memory allocation
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   4096  // Small heap - allocation failures
+// 4096 could not fit all four task stacks + TCBs + queue, so xTaskCreate for
+// DebugTask silently returned NULL and the UART console never existed.
+#define configTOTAL_HEAP_SIZE                   8192
 #define configAPPLICATION_ALLOCATED_HEAP        0
 #define configUSE_HEAP_SCHEME                   1     // Heap_1: no free() support!
 
@@ -93,6 +97,7 @@
 // Handlers
 #define vPortSVCHandler     SVC_Handler
 #define xPortPendSVHandler  PendSV_Handler
-#define xPortSysTickHandler SysTick_Handler
+// SysTick is NOT mapped: stm32f1xx_it.c owns SysTick_Handler so HAL_IncTick()
+// still runs, and forwards to xPortSysTickHandler() once the scheduler starts.
 
 #endif /* FREERTOS_CONFIG_H */

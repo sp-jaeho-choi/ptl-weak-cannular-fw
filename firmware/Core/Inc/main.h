@@ -61,10 +61,15 @@ extern UART_HandleTypeDef huart1;
 extern SystemState_t g_SystemState;
 extern uint8_t g_AuthLevel;  // 0=none, 1=user, 2=admin
 extern char g_DebugBuffer[512];  // Global debug buffer
+extern char g_ServicePassword[];  // Leaked over CAN by CAN_SendAlarm()
 
 // Function prototypes
 void Error_Handler(void);
 void SystemClock_Config(void);
+void MX_GPIO_Init(void);
+void MX_CAN_Init(void);
+void MX_USART1_UART_Init(void);
+void CheckPumpStatus(uint16_t depth);
 
 #ifdef __cplusplus
 }

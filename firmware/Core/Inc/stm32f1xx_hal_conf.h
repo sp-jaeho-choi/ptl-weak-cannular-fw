@@ -5,7 +5,7 @@
 #define HAL_MODULE_ENABLED
 #define HAL_ADC_MODULE_ENABLED
 #define HAL_CAN_MODULE_ENABLED
-#define HAL_CAN_LEGACY_MODULE_ENABLED
+// #define HAL_CAN_LEGACY_MODULE_ENABLED   // mutually exclusive with HAL_CAN_MODULE_ENABLED; code uses the modern API
 #define HAL_CORTEX_MODULE_ENABLED
 #define HAL_DMA_MODULE_ENABLED
 #define HAL_FLASH_MODULE_ENABLED
@@ -26,7 +26,7 @@
 // System Configuration
 #define VDD_VALUE               3300U
 #define TICK_INT_PRIORITY       0x0F
-#define USE_RTOS                1
+#define USE_RTOS                0   // HAL rejects any other value (stm32f1xx_hal_def.h)
 #define PREFETCH_ENABLE         1
 
 // Assert Selection (disabled for vulnerable firmware)

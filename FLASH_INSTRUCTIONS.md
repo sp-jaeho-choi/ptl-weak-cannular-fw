@@ -53,9 +53,42 @@
 
 ### 라이브러리 설정
 
-1. HAL 드라이버를 `firmware/Drivers/STM32F1xx_HAL_Driver/` 디렉토리에 복사
-2. FreeRTOS를 `firmware/Middlewares/Third_Party/FreeRTOS/` 디렉토리에 복사
-3. CMSIS를 `firmware/Drivers/CMSIS/` 디렉토리에 복사
+HAL·CMSIS·FreeRTOS 는 ST 와 FreeRTOS 배포본을 그대로 쓰므로 저장소에 넣지 않습니다
+(`.gitignore` 처리). 클론한 뒤 아래 세 개를 받아 놓아야 빌드가 됩니다.
+
+```bash
+cd firmware
+
+# HAL 드라이버 (STM32CubeF1 의 서브모듈)
+git clone --depth 1 https://github.com/STMicroelectronics/stm32f1xx_hal_driver \
+    Drivers/STM32F1xx_HAL_Driver
+
+# CMSIS 디바이스 헤더
+git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_f1 \
+    Drivers/CMSIS/Device/ST/STM32F1xx
+
+# CMSIS 코어 헤더 (STM32CubeF1 의 Drivers/CMSIS/Include 를 복사)
+#   core_cm3.h 등이 Drivers/CMSIS/Include/ 아래에 오면 됩니다.
+
+# FreeRTOS 커널 → Middlewares/Third_Party/FreeRTOS/Source
+git clone --depth 1 --branch V10.6.2 https://github.com/FreeRTOS/FreeRTOS-Kernel \
+    Middlewares/Third_Party/FreeRTOS/Source
+```
+
+받은 뒤 배치가 맞는지 확인:
+
+```
+firmware/Drivers/STM32F1xx_HAL_Driver/{Inc,Src}/
+firmware/Drivers/CMSIS/Include/core_cm3.h
+firmware/Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h
+firmware/Middlewares/Third_Party/FreeRTOS/Source/{tasks.c,include/FreeRTOS.h}
+firmware/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3/port.c
+```
+
+> Windows 에서 패키지 매니저 없이 툴체인을 갖추려면 xPack 릴리스 zip 을 풀어 쓰면
+> 됩니다 — `arm-none-eabi-gcc` (xpack-dev-tools/arm-none-eabi-gcc-xpack) 와
+> `make` (xpack-dev-tools/windows-build-tools-xpack). PATH 에 두 `bin` 을 넣고
+> `make all` 을 실행합니다.
 
 ### 빌드 명령
 

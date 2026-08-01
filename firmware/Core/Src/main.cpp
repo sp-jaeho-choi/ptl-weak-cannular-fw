@@ -17,7 +17,7 @@ char g_DebugBuffer[512];  // Global buffer - overflow risk
 
 // Weak authentication tokens
 static uint8_t g_AuthTokens[4] = {0x12, 0x34, 0x56, 0x78};  // Hardcoded tokens
-static char g_ServicePassword[] = "service";  // TODO: Remove before production
+char g_ServicePassword[] = "service";  // TODO: Remove before production
 
 // FreeRTOS handles
 static TaskHandle_t xCanTaskHandle;
@@ -28,7 +28,9 @@ static QueueHandle_t xCanRxQueue;
 static SemaphoreHandle_t xCanMutex;  // Weak mutex usage - race conditions possible
 
 // Task stack sizes (intentionally small for stack overflow demos)
-#define CAN_TASK_STACK_SIZE 128        // Too small - overflow risk
+// CanTask runs the command handlers, which sprintf/printf into 128-192 byte
+// buffers, so it needs more than the 128 words the ISR-based version got away with.
+#define CAN_TASK_STACK_SIZE 320
 #define PUMP_TASK_STACK_SIZE 256
 #define TELEMETRY_TASK_STACK_SIZE 128
 #define DEBUG_TASK_STACK_SIZE 512
@@ -53,6 +55,9 @@ int main(void)
     
     // Initialize pump system
     Pump_Init();
+
+    // CAN-over-SWD transport for benches without an adapter/transceiver.
+    SwdMb_Init();
     
     // Print startup message (information disclosure)
     printf("CANnula Infusion Pump v1.0\r\n");
@@ -61,7 +66,7 @@ int main(void)
     printf("Service Password: %s\r\n", g_ServicePassword);  // Leaked password!
     
     // Create queues (no overflow protection)
-    xCanRxQueue = xQueueCreate(10, sizeof(CAN_RxHeaderTypeDef) + 8);
+    xCanRxQueue = xQueueCreate(10, sizeof(CanRxItem_t));
     xCanMutex = xSemaphoreCreateMutex();
     
     // Create tasks with weak priorities (all same priority - race conditions)
@@ -77,32 +82,44 @@ int main(void)
     while(1);
 }
 
+// Called from the CAN RX interrupt; xCanRxQueue lives in this file.
+void CAN_EnqueueFromISR(const CanRxItem_t *item)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Queue full simply drops the frame - no counter, no alarm.
+    xQueueSendFromISR(xCanRxQueue, item, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
 static void CanTask(void *pvParameters)
 {
-    CAN_RxHeaderTypeDef rxHeader;
-    uint8_t rxData[8];
-    
+    CanRxItem_t item;
+
     // Enable CAN receive interrupt
     HAL_CAN_Start(&hcan);
     HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
-    
+
     while(1)
     {
-        // Wait for CAN message (no timeout - DoS vulnerability)
-        if(xQueueReceive(xCanRxQueue, &rxData, portMAX_DELAY) == pdTRUE)
+        // Frames injected over SWD are dispatched here too, so the poll interval
+        // doubles as the wait for the bus queue.
+        SwdMb_Poll();
+
+        if(xQueueReceive(xCanRxQueue, &item, pdMS_TO_TICKS(5)) == pdTRUE)
         {
             // Process without mutex in some cases - race condition
-            if(rxHeader.StdId == CAN_ID_DEBUG_CMD)
+            if(item.header.StdId == CAN_ID_DEBUG_CMD)
             {
                 // Direct processing without protection
-                CAN_HandleDebug(rxData);
+                CAN_HandleDebug(item.data);
             }
             else
             {
                 // Weak mutex usage
                 if(xSemaphoreTake(xCanMutex, 10) == pdTRUE)
                 {
-                    CAN_ProcessMessage(&rxHeader, rxData);
+                    CAN_ProcessMessage(&item.header, item.data);
                     xSemaphoreGive(xCanMutex);
                 }
             }
@@ -112,37 +129,60 @@ static void CanTask(void *pvParameters)
 
 static void PumpTask(void *pvParameters)
 {
-    static uint32_t infusionTicks = 0;
-    static uint16_t recursionDepth = 0;  // Stack overflow via recursion
-    
+    // Fractional millilitres carried between ticks, scaled by 3600.
+    static uint32_t rateAccum = 0;
+    static SystemState_t prevState = STATE_IDLE;
+
     while(1)
     {
+        // Entering a new infusion session starts the delivered volume over.
+        if(g_SystemState == STATE_INFUSING && prevState != STATE_INFUSING)
+        {
+            rateAccum = 0;
+            g_PumpParams.volume_infused = 0;
+        }
+        prevState = g_SystemState;
+
+        // Do not keep infusing into a patient with nobody watching: if the
+        // workstation stops talking to us, stop and raise an alarm.
+        if(g_SystemState == STATE_INFUSING && g_LastWsTick != 0 &&
+           (HAL_GetTick() - g_LastWsTick) > WS_LINK_TIMEOUT_MS)
+        {
+            Pump_Stop();
+            Pump_RaiseAlarm(ALARM_SYSTEM_FAULT);
+            printf("Workstation link lost - infusion stopped\r\n");
+        }
+
         switch(g_SystemState)
         {
             case STATE_INFUSING:
-                // Vulnerable calculation - integer overflow possible
-                infusionTicks++;
-                uint32_t volumeInfused = (g_PumpParams.rate_mlh * infusionTicks) / 3600;
-                
-                // No bounds checking
-                g_PumpParams.volume_infused = volumeInfused;
-                
+            {
+                // Accumulate instead of recomputing from a tick count: an
+                // absolute recompute wiped out whatever Pump_Bolus() added and
+                // made the volume jump whenever the rate changed.
+                // One tick is 100ms of delivery, run at 10x so the lab shows movement.
+                rateAccum += g_PumpParams.rate_mlh;
+                while(rateAccum >= 3600)
+                {
+                    rateAccum -= 3600;
+                    g_PumpParams.volume_infused++;   // no bounds checking
+                }
+
                 // Check completion without mutex
-                if(g_PumpParams.volume_infused >= g_PumpParams.vtbi_ml)
+                // vtbi 0 means no prescription - do not complete instantly.
+                if(g_PumpParams.vtbi_ml > 0 &&
+                   g_PumpParams.volume_infused >= g_PumpParams.vtbi_ml)
                 {
                     g_SystemState = STATE_IDLE;
                     Pump_RaiseAlarm(ALARM_EMPTY_RESERVOIR);
                 }
                 
-                // Recursive function call - stack overflow risk
-                if(recursionDepth < 100)  // Weak limit
-                {
-                    recursionDepth++;
-                    CheckPumpStatus(recursionDepth);  // Recursive call
-                    recursionDepth--;
-                }
+                // The CheckPumpStatus() recursion is reached through the 0x130
+                // "recursive" debug command (HACKING_SCENARIOS.md scenario 6),
+                // not from the normal infusion path.
                 break;
-                
+            }
+
             case STATE_ALARM:
                 // Alarm can be cleared without authentication
                 HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
@@ -173,7 +213,8 @@ static void TelemetryTask(void *pvParameters)
         
         // Send without checking CAN bus status
         CAN_SendTelemetry();
-        
+        CAN_SendStatus();
+
         // Fixed delay - timing attack possible
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -315,10 +356,12 @@ void MX_GPIO_Init(void)
 void MX_CAN_Init(void)
 {
     hcan.Instance = CAN1;
-    hcan.Init.Prescaler = 4;  // For 72MHz APB1 clock -> 500kbps
+    // APB1 is HCLK/2 = 36MHz, not 72MHz. 36e6 / (4 * (1+15+2)) = 500000 exactly.
+    // The old 13TQ+2TQ gave 36e6 / (4 * 16) = 562.5kbps, which no 500k node can talk to.
+    hcan.Init.Prescaler = 4;
     hcan.Init.Mode = CAN_MODE_NORMAL;
     hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
-    hcan.Init.TimeSeg1 = CAN_BS1_13TQ;
+    hcan.Init.TimeSeg1 = CAN_BS1_15TQ;
     hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
     hcan.Init.TimeTriggeredMode = DISABLE;
     hcan.Init.AutoBusOff = DISABLE;  // Weak: no auto recovery
