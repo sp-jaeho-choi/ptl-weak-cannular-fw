@@ -14,6 +14,27 @@ OPT = -O0
 # Build path
 BUILD_DIR = build
 
+######################################
+# 서드파티 의존성 (SBOM)
+######################################
+# Drivers/ 와 Middlewares/ 는 저장소에 없다 — 빌드할 때 받아온다(`make deps`).
+# 따라서 "무엇을 받아오는가" 를 적어둔 이 변수들이 곧 이 펌웨어의 의존성 선언이다.
+#
+# BeyondCDX 가 이 Makefile 을 그대로 읽어 SBOM 을 만든다. 버전이 없으면 컴포넌트는 나오지만
+# CVE 매칭이 되지 않으므로, 받아오는 태그를 반드시 여기에 고정해 둔다.
+#
+# 주의: 교육용으로 일부러 오래된 FreeRTOS 를 쓴다. 10.0.1 에는 알려진 CVE 가 있고,
+# 그것을 스캔 파이프라인이 잡아내는 것을 보이는 것이 이 저장소의 목적이다.
+HAL_VERSION       = v1.1.6
+CMSIS_VERSION     = 5.9.0
+FREERTOS_VERSION  = V10.0.1
+TOOLCHAIN_VERSION = 10.3.1
+
+HAL_REPO      = https://github.com/STMicroelectronics/stm32f1xx-hal-driver
+CMSIS_REPO    = https://github.com/ARM-software/CMSIS_5
+FREERTOS_REPO = https://github.com/FreeRTOS/FreeRTOS-Kernel
+CMSIS_DEVICE_REPO = https://github.com/STMicroelectronics/cmsis_device_f1
+
 # Source files
 CPP_SOURCES = \
 Core/Src/main.cpp \
@@ -166,7 +187,43 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).hex
 	"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD -w $(BUILD_DIR)/$(TARGET).hex -v -rst
 
+######################################
+# 서드파티 트리 받아오기
+######################################
+# Drivers/ 와 Middlewares/ 는 .gitignore 돼 있다. 위의 *_VERSION 변수에 고정한 태그로 받아온다 —
+# 그래야 그 변수들이 "받아왔다고 주장하는 버전" 이 아니라 실제로 받아온 버전이 되고, SBOM 도
+# 사실과 일치한다.
+DEPS_STAMP = .deps-$(HAL_VERSION)-$(CMSIS_VERSION)-$(FREERTOS_VERSION)
+
+deps: $(DEPS_STAMP)
+
+$(DEPS_STAMP):
+	@rm -f .deps-*
+	@echo ">> STM32F1xx HAL $(HAL_VERSION)"
+	@rm -rf Drivers/STM32F1xx_HAL_Driver
+	@mkdir -p Drivers Middlewares/Third_Party
+	git clone --depth 1 --branch $(HAL_VERSION) $(HAL_REPO) Drivers/STM32F1xx_HAL_Driver
+	@echo ">> CMSIS Core $(CMSIS_VERSION)"
+	@rm -rf Drivers/CMSIS .cmsis-tmp
+	git clone --depth 1 --branch $(CMSIS_VERSION) $(CMSIS_REPO) .cmsis-tmp
+	@mkdir -p Drivers/CMSIS
+	@cp -R .cmsis-tmp/CMSIS/Core/Include Drivers/CMSIS/Include
+	@rm -rf .cmsis-tmp
+	@echo ">> CMSIS device header (STM32F1xx)"
+	@rm -rf .cmsisdev-tmp
+	git clone --depth 1 $(CMSIS_DEVICE_REPO) .cmsisdev-tmp
+	@mkdir -p Drivers/CMSIS/Device/ST/STM32F1xx
+	@cp -R .cmsisdev-tmp/Include Drivers/CMSIS/Device/ST/STM32F1xx/Include
+	@rm -rf .cmsisdev-tmp
+	@echo ">> FreeRTOS $(FREERTOS_VERSION)"
+	@rm -rf Middlewares/Third_Party/FreeRTOS
+	git clone --depth 1 --branch $(FREERTOS_VERSION) $(FREERTOS_REPO) .freertos-tmp
+	@mkdir -p Middlewares/Third_Party/FreeRTOS
+	@mv .freertos-tmp Middlewares/Third_Party/FreeRTOS/Source
+	@touch $@
+	@echo ">> 완료"
+
 # Dependencies
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-.PHONY: all clean flash
+.PHONY: all clean flash deps
